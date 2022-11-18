@@ -6,85 +6,20 @@ use Instruction::*;
 
 fn main() {
     let mut m = mima! {
-        START = 0x100;
-        0x080: let i = 0;
-        0x081: let j = 0;
-        0x082: let len = 0;
-        0x083: let min_idx = 0;
-        0x084: let tmp1 = 0;
-
-        // calculate length
-        0x100:  LDC 1;
-                ADD 0x040;
-                STV len;
-        // outer: abort condition
-        //      i == len - 1
-        0x103:  LDV i;
-                EQL len;
-                JMN 0x124; // -> end
-
-        // min_idx = i
-        0x106:  LDV i;
-                STV min_idx;
-
-        // j = i + 1
-        0x108:  LDC 1;
-                ADD i;
-                STV j;
-
-            // inner: abort condition
-            //      j == len
-            0x10B:  LDV j;
-                    EQL len;
-                    JMN 0x11A; // -> break inner loop
-            // arr[j] >= arr[min_idx]
-            // arr[min_idx] - arr[j] - 1 < 0
-            0x10E:  LDIV j;
-                    NOT;
-                    STV tmp1;   // tmp1 = -arr[j]
-                    LDIV min_idx;
-                    ADD tmp1;
-                    JMN 0x116; // -> skip assignment of min_idx
-            // assign min_idx
-            0x114:  LDV j;
-                    STV min_idx;
-            // inner: increment
-            0x116:  LDC 1;
-                    ADD j;
-                    STV j;
-            // inner: loop
-            0x119:  JMP 0x10B; // -> inner abort condition
-
-        // swap arr[i] with arr[min_idx]
-        0x11A:  LDIV min_idx;
-                STV tmp1;
-                LDIV i;
-                STIV min_idx;
-                LDV tmp1;
-                STIV i;
-        // outer: increment
-        0x120:  LDC 1;
-                ADD i;
-                STV i;
-        // outer: loop
-        0x123:  JMP 0x103; // -> outer abort condition
-
-        0x124:  HALT;
+        START = 0x010;
+        0x010:  LDC 1;
+                NOT;
+                STV 0x00;
+                LDC 2;
+                ADD 0x00;
+                STV 0x00;
+                JMN 0x100;
+                HALT;
+        0x100:  TRAP;
+                HALT;
     };
-
-    m.memory[0x00] = 5;
-    m.memory[0x01] = 3;
-    m.memory[0x02] = 4;
-    m.memory[0x40] = 0x02;
-
-    let mut i = 1;
-    while let Some(_) = m.step() {
-        println!(
-            "{i:>03} || {:#05X} | {:#05X} | {:#05X} | {:#05X} | {:#05X} | {:#05X}",
-            m.akku, m.memory[0x80], m.memory[0x81], m.memory[0x82], m.memory[0x83], m.memory[0x84],
-        );
-        i += 1;
-    }
+    m.run();
+    println!("0x{:X}", m.memory[0x00]);
 }
 
 #[macro_export]
@@ -316,7 +251,11 @@ struct Mima {
 
 impl Mima {
     fn run(&mut self) {
-        while self.step().is_some() {}
+        while let Some(trap) = self.step() {
+            if trap {
+                println!("reached trap");
+            }
+        }
     }
 
     fn step(&mut self) -> Option<bool> {
@@ -340,7 +279,7 @@ impl Mima {
                 self.memory[a as usize] = self.akku;
             }
             ADD(a) => {
-                self.akku = self.akku.wrapping_add(self.memory[a as usize]);
+                self.akku = add_1c::<24>(self.akku, self.memory[a as usize]);
             }
             AND(a) => {
                 self.akku &= self.memory[a as usize];
@@ -365,7 +304,7 @@ impl Mima {
                 let sign_mask = 1 << (5 * 4 - 1);
                 if self.akku & sign_mask != 0 {
                     // sign bit is set
-                    if self.akku != 0xFFFFF {
+                    if self.akku != 0xFFFFFF {
                         // we made sure it's not -0
                         self.iar = a as usize;
                     }
@@ -392,8 +331,55 @@ impl Mima {
             TRAP => {
                 return Some(true);
             }
+        };
+
+        self.akku &= 0xFFFFFF;
+        if self.akku == 0xFFFFFF {
+            // we sneakily convert negative zero back to zero
+            self.akku = 0;
         }
 
         Some(false)
+    }
+}
+
+fn add_1c<const BITS: usize>(mut a: u32, mut b: u32) -> u32 {
+    let carry_mask = 1 << BITS;
+    let valid_mask = (1 << BITS) - 1;
+
+    a &= valid_mask;
+    b &= valid_mask;
+    
+    let mut result = a + b;
+    let carry = result & carry_mask;
+    result &= valid_mask;
+    if carry != 0 {
+        result += 1;
+        result &= valid_mask;
+    }
+
+    if result == valid_mask {
+        // the result is all 1's, so it's the negative 0
+        // let's just sneakily turn that back into a normal 0.
+        0
+    } else {
+        result & valid_mask
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_1c;
+
+    #[test]
+    fn ones_complement() {
+        assert_eq!(0, add_1c::<24>(!1, 1));
+        assert_eq!(1, add_1c::<24>(!3, 4));
+        assert_eq!(!3 & 0xFFFFFF, add_1c::<24>(!4, 1));
+        assert_eq!(0, add_1c::<24>(!0, !0));
+        assert_eq!(0, add_1c::<24>(0, 0));
+        assert_eq!(0x800000, add_1c::<24>(0x7FFFFF, 1));
+        assert_eq!(!1 & 0xFFFFFF, add_1c::<24>(3, !4));
+        assert_eq!(0, add_1c::<24>(3, !3));
     }
 }
