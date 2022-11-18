@@ -1,82 +1,96 @@
+#![feature(is_sorted)]
 #![allow(clippy::upper_case_acronyms)]
 
+use std::fmt;
+use std::fmt::Formatter;
 use std::time::Duration;
 use Instruction::*;
 
 fn main() {
     let mut m = mima! {
-        START = 0x0FD;
+        START = 0x100;
         0x080: let i = 0;
         0x081: let j = 0;
-        0x082: let jMin = 0;
-        0x083: let tmp1 = 0;
-        0x084: let tmp2 = 0;
-        0x085: let length = 0;
+        0x082: let len = 0;
+        0x084: let min_idx = 0;
+        0x085: let tmp1 = 0;
+        //0x086: let tmp2 = 0;
+        0x088: let one = 1;
 
         // calculate length
-        0x0FD:  LDC 1;
-                ADD 0x040;
-                STV length;
+        0x100:  LDV 0x040;
+                TRAP;
+                ADD one;
+                STV len;
 
-        // begin outer loop
-        0x100:  LDV i;
-                EQL length;
-                JMN 0x124;
-        
-        0x103:  LDV i;
-                STV jMin;
-        
-        0x105:  LDC 1;
-                ADD i;
+        // outer: abort condition
+        //      i == len - 1
+        0x104:  LDV i;
+                EQL len;
+                JMN 0x127; // -> end
+
+        // min_idx = i
+        0x107:  LDV i;
+                STV min_idx;
+
+        // j = i + 1
+        0x109:  LDV i;
+                ADD one;
                 STV j;
-        
-        // begin inner loop
-        0x108:  LDV j;
-                EQL length;
-                JMN 0x117;
 
-                LDIV j;
-                NOT;
+            // inner: abort condition
+            //      j == len
+            0x10C:  LDV j;
+                    EQL len;
+                    JMN 0x11C; // -> break inner loop
+                    // arr[j] >= arr[min_idx]
+                    // arr[min_idx] - arr[j] - 1 < 0
+            0x10F:  LDIV j;
+                    NOT;
+                    STV tmp1;   // tmp1 = -arr[j]
+                    LDIV min_idx;
+                    ADD tmp1;
+                    TRAP;
+                    JMN 0x118; // -> skip assignment of min_idx
+            // assign min_idx
+            0x116:  LDV j;
+                    STV min_idx;
+            // inner: increment
+            0x118:  LDV j;
+                    ADD one;
+                    STV j;
+                    // inner: loop
+            0x11B:  JMP 0x10C; // -> inner abort condition
+
+        // swap arr[i] with arr[min_idx]
+        0x11C:  TRAP;
+                LDIV min_idx;
                 STV tmp1;
-                LDIV jMin;
-                ADD tmp1;
-                JMN 0x113;
-        0x111:  LDV j;
-                STV jMin;
-        0x113:  LDC 1;
-                ADD j;
-                STV j;
-                JMP 0x108;
-        0x117:  LDV jMin;
-                EQL i;
-                JMN 0x103;
-        0x11A:  LDIV i;
-                STV tmp2;
-                LDIV jMin;
+                LDIV i;
+                STIV min_idx;
+                LDV tmp1;
                 STIV i;
-                LDV tmp2;
-                STIV jMin;
-        0x120:  LDC 1;
-                ADD i;
+        // outer: increment
+        0x123:  LDV i;
+                ADD one;
                 STV i;
-                JMP 0x100;
-        0x124:  HALT;
+        // outer: loop
+        0x126:  JMP 0x104; // -> outer abort condition
+
+        0x127:  HALT;
     };
 
-    m.memory[0x00] = 7;
-    m.memory[0x01] = 2;
-    m.memory[0x02] = 4;
-    m.memory[0x40] = 0x02;
-    
-    while let Some(()) = m.step() {
-        std::thread::sleep(Duration::from_millis(300));
-        println!("i,j = {:x}, {:x}", m.memory[0x80], m.memory[0x81]);
-    }
+    let list = [
+        80240, 85353, 28226, 1514, 61886, 85830, 30618, 15241, 96377, 99843, 99028, 76734, 52158,
+        4048, 40227, 1887, 36023, 45753, 103006, 70326,
+    ];
 
-    println!("length: {:x}", m.memory[0x85]);
-    println!("{:x}", m.memory[0]);
-    println!("{:x}", m.memory[1]);
-    println!("{:x}", m.memory[2]);
+    m.memory[..20].copy_from_slice(&list[..20]);
+    m.memory[0x40] = (list.len() - 1) as u32;
+
+    m.run();
+    
+    assert!(&m.memory[..20].is_sorted());
 }
 
 #[macro_export]
@@ -137,7 +151,7 @@ macro_rules! mima {
     };
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 enum Instruction {
     LDC(u32),
     LDV(u32),
@@ -154,6 +168,30 @@ enum Instruction {
     HALT,
     NOT,
     RAR,
+    TRAP,
+}
+
+impl fmt::Debug for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LDC(x) => write!(f, "LDC {x:#05X}"),
+            LDV(x) => write!(f, "LDV {x:#05X}"),
+            STV(x) => write!(f, "STV {x:#05X}"),
+            ADD(x) => write!(f, "ADD {x:#05X}"),
+            AND(x) => write!(f, "AND {x:#05X}"),
+            OR(x) => write!(f, "OR {x:#05X}"),
+            XOR(x) => write!(f, "XOR {x:#05X}"),
+            EQL(x) => write!(f, "EQL {x:#05X}"),
+            JMP(x) => write!(f, "JMP {x:#05X}"),
+            JMN(x) => write!(f, "JMN {x:#05X}"),
+            LDIV(x) => write!(f, "LDIV {x:#05X}"),
+            STIV(x) => write!(f, "STIV {x:#05X}"),
+            HALT => write!(f, "HALT"),
+            NOT => write!(f, "NOT"),
+            RAR => write!(f, "RAR"),
+            TRAP => write!(f, "TRAP"),
+        }
+    }
 }
 
 impl Instruction {
@@ -180,6 +218,7 @@ impl Instruction {
                     0xF0 => HALT,
                     0xF1 => NOT,
                     0xF2 => RAR,
+                    0xF3 => TRAP,
                     _ => panic!(),
                 }
             }
@@ -204,6 +243,7 @@ impl Instruction {
             HALT => 0xF0 << 16,
             NOT => 0xF1 << 16,
             RAR => 0xF2 << 16,
+            TRAP => 0xF3 << 16,
         }
     }
 
@@ -224,6 +264,7 @@ impl Instruction {
             HALT => 0,
             NOT => 0,
             RAR => 0,
+            TRAP => 0,
         };
         operand & 0x000FFFFF
     }
@@ -254,6 +295,7 @@ impl Builder {
     }
 
     fn instruction(mut self, i: Instruction) -> Self {
+        assert_eq!(self.memory[self.addr], 0, "writing in occupied memory");
         let addr = self.addr;
         println!("0x{addr:>04x}: {i:?}");
         self.addr += 1;
@@ -283,7 +325,7 @@ impl Mima {
         while self.step().is_some() {}
     }
 
-    fn step(&mut self) -> Option<()> {
+    fn step(&mut self) -> Option<bool> {
         if self.halted {
             return None;
         }
@@ -291,6 +333,7 @@ impl Mima {
         self.iar += 1;
 
         let instruction = Instruction::from_repr(instruction);
+        println!("{:?}", instruction);
 
         match instruction {
             LDC(a) => {
@@ -331,15 +374,7 @@ impl Mima {
                     if self.akku != 0xFFFFF {
                         // we made sure it's not -0
                         self.iar = a as usize;
-                        println!(
-                            "jumping to {a:x} = {:?}",
-                            Instruction::from_repr(self.memory[self.iar])
-                        );
-                    } else {
-                        println!("oh boi..");
                     }
-                } else {
-                    println!("JMN, but sign bit not set: {:x}", self.akku);
                 }
             }
             HALT => {
@@ -360,8 +395,11 @@ impl Mima {
                 let addr = self.memory[a as usize] as usize;
                 self.memory[addr] = self.akku;
             }
+            TRAP => {
+                return Some(true);
+            }
         }
 
-        Some(())
+        Some(false)
     }
 }
