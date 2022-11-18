@@ -2,8 +2,6 @@
 #![allow(clippy::upper_case_acronyms)]
 
 use std::fmt;
-use std::fmt::Formatter;
-use std::time::Duration;
 use Instruction::*;
 
 fn main() {
@@ -12,85 +10,81 @@ fn main() {
         0x080: let i = 0;
         0x081: let j = 0;
         0x082: let len = 0;
-        0x084: let min_idx = 0;
-        0x085: let tmp1 = 0;
-        //0x086: let tmp2 = 0;
-        0x088: let one = 1;
+        0x083: let min_idx = 0;
+        0x084: let tmp1 = 0;
 
         // calculate length
-        0x100:  LDV 0x040;
-                TRAP;
-                ADD one;
+        0x100:  LDC 1;
+                ADD 0x040;
                 STV len;
-
         // outer: abort condition
         //      i == len - 1
-        0x104:  LDV i;
+        0x103:  LDV i;
                 EQL len;
-                JMN 0x127; // -> end
+                JMN 0x124; // -> end
 
         // min_idx = i
-        0x107:  LDV i;
+        0x106:  LDV i;
                 STV min_idx;
 
         // j = i + 1
-        0x109:  LDV i;
-                ADD one;
+        0x108:  LDC 1;
+                ADD i;
                 STV j;
 
             // inner: abort condition
             //      j == len
-            0x10C:  LDV j;
+            0x10B:  LDV j;
                     EQL len;
-                    JMN 0x11C; // -> break inner loop
-                    // arr[j] >= arr[min_idx]
-                    // arr[min_idx] - arr[j] - 1 < 0
-            0x10F:  LDIV j;
+                    JMN 0x11A; // -> break inner loop
+            // arr[j] >= arr[min_idx]
+            // arr[min_idx] - arr[j] - 1 < 0
+            0x10E:  LDIV j;
                     NOT;
                     STV tmp1;   // tmp1 = -arr[j]
                     LDIV min_idx;
                     ADD tmp1;
-                    TRAP;
-                    JMN 0x118; // -> skip assignment of min_idx
+                    JMN 0x116; // -> skip assignment of min_idx
             // assign min_idx
-            0x116:  LDV j;
+            0x114:  LDV j;
                     STV min_idx;
             // inner: increment
-            0x118:  LDV j;
-                    ADD one;
+            0x116:  LDC 1;
+                    ADD j;
                     STV j;
-                    // inner: loop
-            0x11B:  JMP 0x10C; // -> inner abort condition
+            // inner: loop
+            0x119:  JMP 0x10B; // -> inner abort condition
 
         // swap arr[i] with arr[min_idx]
-        0x11C:  TRAP;
-                LDIV min_idx;
+        0x11A:  LDIV min_idx;
                 STV tmp1;
                 LDIV i;
                 STIV min_idx;
                 LDV tmp1;
                 STIV i;
         // outer: increment
-        0x123:  LDV i;
-                ADD one;
+        0x120:  LDC 1;
+                ADD i;
                 STV i;
         // outer: loop
-        0x126:  JMP 0x104; // -> outer abort condition
+        0x123:  JMP 0x103; // -> outer abort condition
 
-        0x127:  HALT;
+        0x124:  HALT;
     };
 
-    let list = [
-        80240, 85353, 28226, 1514, 61886, 85830, 30618, 15241, 96377, 99843, 99028, 76734, 52158,
-        4048, 40227, 1887, 36023, 45753, 103006, 70326,
-    ];
+    m.memory[0x00] = 5;
+    m.memory[0x01] = 3;
+    m.memory[0x02] = 4;
+    m.memory[0x40] = 0x02;
 
-    m.memory[..20].copy_from_slice(&list[..20]);
-    m.memory[0x40] = (list.len() - 1) as u32;
-
-    m.run();
-    
-    assert!(&m.memory[..20].is_sorted());
+    let mut i = 1;
+    while let Some(_) = m.step() {
+        println!(
+            "{i:>03} || {:#05X} | {:#05X} | {:#05X} | {:#05X} | {:#05X} | {:#05X}",
+            m.akku, m.memory[0x80], m.memory[0x81], m.memory[0x82], m.memory[0x83], m.memory[0x84],
+        );
+        i += 1;
+    }
 }
 
 #[macro_export]
@@ -333,7 +327,7 @@ impl Mima {
         self.iar += 1;
 
         let instruction = Instruction::from_repr(instruction);
-        println!("{:?}", instruction);
+        //println!("{:?}", instruction);
 
         match instruction {
             LDC(a) => {
